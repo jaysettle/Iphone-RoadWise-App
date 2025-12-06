@@ -19,8 +19,11 @@ struct MapTabView: View {
     // Claude API service
     @State private var claudeService = ClaudeService()
 
-    // Text-to-speech
-    @State private var speechSynthesizer = AVSpeechSynthesizer()
+    // Azure Speech TTS
+    @StateObject private var azureSpeech = AzureSpeechService()
+
+    // Audio player for Azure TTS
+    @State private var audioPlayer: AVAudioPlayer?
 
     // Map region - will follow user
     @State private var mapRegion = MKCoordinateRegion(
@@ -219,10 +222,7 @@ struct MapTabView: View {
                     // Add to trip stats
                     tripStats.addFact(fact)
 
-                    // Show fact sheet
-                    showFactSheet = true
-
-                    // Speak the fact (if not muted)
+                    // Speak the fact (if not muted) - no popup, just speak
                     if !settings.isMuted {
                         speakFact(fact.text)
                     }
@@ -264,28 +264,32 @@ struct MapTabView: View {
     }
 
     private func speakFact(_ text: String) {
-        // Configure audio session for playback (required for TTS on iOS)
-        do {
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: .duckOthers)
-            try AVAudioSession.sharedInstance().setActive(true)
-        } catch {
-            print("Audio session error: \(error)")
+        Task {
+            do {
+                let audioData = try await azureSpeech.synthesizeSpeech(text: text)
+
+                await MainActor.run {
+                    // Configure audio session for playback
+                    do {
+                        try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: .duckOthers)
+                        try AVAudioSession.sharedInstance().setActive(true)
+                    } catch {
+                        print("Audio session error: \(error)")
+                    }
+
+                    // Play the audio
+                    do {
+                        audioPlayer = try AVAudioPlayer(data: audioData)
+                        audioPlayer?.volume = Float(settings.volume)
+                        audioPlayer?.play()
+                    } catch {
+                        print("Audio player error: \(error)")
+                    }
+                }
+            } catch {
+                print("Azure Speech error: \(error)")
+            }
         }
-
-        // Stop any current speech
-        speechSynthesizer.stopSpeaking(at: .immediate)
-
-        let utterance = AVSpeechUtterance(string: text)
-        utterance.rate = Float(settings.speechRate * 0.5) // Adjust for iOS rate scale
-        utterance.pitchMultiplier = 1.0
-        utterance.volume = Float(settings.volume)
-
-        // Use a nice voice
-        if let voice = AVSpeechSynthesisVoice(language: "en-US") {
-            utterance.voice = voice
-        }
-
-        speechSynthesizer.speak(utterance)
     }
 }
 
