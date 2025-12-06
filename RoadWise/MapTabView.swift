@@ -22,8 +22,8 @@ struct MapTabView: View {
     // Azure Speech TTS
     @StateObject private var azureSpeech = AzureSpeechService()
 
-    // Audio player for Azure TTS
-    @State private var audioPlayer: AVAudioPlayer?
+    // Audio player delegate to track playback state
+    @StateObject private var audioDelegate = AudioPlayerDelegate()
 
     // Map region - will follow user
     @State private var mapRegion = MKCoordinateRegion(
@@ -121,27 +121,44 @@ struct MapTabView: View {
                         .padding(.bottom, 8)
                 }
 
-                // Get Fact button
-                Button(action: getFact) {
-                    HStack {
-                        if isFetching {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                .scaleEffect(0.8)
-                            Text("Fetching Fact...")
-                        } else {
-                            Image(systemName: "sparkles")
-                            Text("Get Fun Fact")
+                // Get Fact button with pause/play control
+                HStack(spacing: 12) {
+                    Button(action: getFact) {
+                        HStack {
+                            if isFetching {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                    .scaleEffect(0.8)
+                                Text("Fetching Fact...")
+                            } else {
+                                Image(systemName: "sparkles")
+                                Text("Get Fun Fact")
+                            }
                         }
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 14)
+                        .background(isFetching ? .gray : settings.themeColor)
+                        .cornerRadius(25)
                     }
-                    .font(.headline)
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 14)
-                    .background(isFetching ? .gray : settings.themeColor)
-                    .cornerRadius(25)
+                    .disabled(isFetching)
+
+                    // Pause/Play button (only visible when audio is playing or paused)
+                    if audioDelegate.isPlaying || audioDelegate.isPaused {
+                        Button(action: togglePlayback) {
+                            Image(systemName: audioDelegate.isPaused ? "play.fill" : "pause.fill")
+                                .font(.system(size: 20))
+                                .foregroundColor(.white)
+                                .frame(width: 44, height: 44)
+                                .background(settings.themeColor)
+                                .clipShape(Circle())
+                        }
+                        .transition(.scale.combined(with: .opacity))
+                    }
                 }
-                .disabled(isFetching)
+                .animation(.easeInOut(duration: 0.2), value: audioDelegate.isPlaying)
+                .animation(.easeInOut(duration: 0.2), value: audioDelegate.isPaused)
                 .padding(.bottom, 20)
             }
         }
@@ -279,9 +296,13 @@ struct MapTabView: View {
 
                     // Play the audio
                     do {
-                        audioPlayer = try AVAudioPlayer(data: audioData)
-                        audioPlayer?.volume = Float(settings.volume)
-                        audioPlayer?.play()
+                        let player = try AVAudioPlayer(data: audioData)
+                        player.volume = Float(settings.volume)
+                        player.delegate = audioDelegate
+                        audioDelegate.player = player
+                        audioDelegate.isPlaying = true
+                        audioDelegate.isPaused = false
+                        player.play()
                     } catch {
                         print("Audio player error: \(error)")
                     }
@@ -289,6 +310,37 @@ struct MapTabView: View {
             } catch {
                 print("Azure Speech error: \(error)")
             }
+        }
+    }
+
+    private func togglePlayback() {
+        guard let player = audioDelegate.player else { return }
+
+        if audioDelegate.isPaused {
+            // Resume
+            player.play()
+            audioDelegate.isPaused = false
+            audioDelegate.isPlaying = true
+        } else {
+            // Pause
+            player.pause()
+            audioDelegate.isPaused = true
+            audioDelegate.isPlaying = false
+        }
+    }
+}
+
+// Audio player delegate to track playback state
+class AudioPlayerDelegate: NSObject, ObservableObject, AVAudioPlayerDelegate {
+    @Published var isPlaying: Bool = false
+    @Published var isPaused: Bool = false
+    var player: AVAudioPlayer?
+
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        DispatchQueue.main.async {
+            self.isPlaying = false
+            self.isPaused = false
+            self.player = nil
         }
     }
 }
